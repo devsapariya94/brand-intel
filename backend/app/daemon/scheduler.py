@@ -347,7 +347,7 @@ class MonitoringDaemon:
     async def cleanup_stale_runs_job(self):
         """Clean up stale 'running' monitor_runs records from crashes"""
         try:
-            cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(hours=1)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
             result = await self.db_client.brand_intel.monitor_runs.update_many(
                 {
                     "status": "running",
