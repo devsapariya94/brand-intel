@@ -1,0 +1,54 @@
+[Unit]
+Description=Brand Intel Monitoring Daemon
+Documentation=https://github.com/yourusername/brand-intel
+After=network.target mongodb.service
+Wants=mongodb.service
+
+[Service]
+Type=simple
+User=brandmonitor
+Group=brandmonitor
+WorkingDirectory=/opt/brand-intel/backend
+
+# Environment variables
+Environment="MONGODB_URI=mongodb://localhost:27017"
+Environment="SCAN_INTERVAL_MINUTES=15"
+Environment="MAX_CONCURRENT_BRANDS=10"
+Environment="LOG_LEVEL=INFO"
+Environment="CIRCUIT_BREAKER_ENABLED=true"
+Environment="DLQ_ENABLED=true"
+
+# Optional: Slack alerting
+# Environment="SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
+# Optional: Email alerting
+# Environment="ALERT_EMAIL=alerts@yourdomain.com"
+
+# Start daemon
+ExecStart=/opt/brand-intel/backend/.venv/bin/python daemon.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=5min
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=brand-intel-monitor
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/brand-intel/backend
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

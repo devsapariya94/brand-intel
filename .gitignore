@@ -1,0 +1,3 @@
+backend/app/monitors/__pycache__/*
+backend/app/__pycache__/*
+backend/app/test/__pycache__/*
