@@ -1,5 +1,5 @@
 """MongoDB schemas and Pydantic models for the monitors component"""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from bson import ObjectId
@@ -22,8 +22,8 @@ class PyObjectId(ObjectId):
         field_schema.update(type="string")
 
 
-class MonitorConfig(BaseModel):
-    """Monitor configuration for a brand"""
+class BrandMonitorConfig(BaseModel):
+    """Per-brand monitor enablement configuration"""
     pastebin_enabled: bool = True
     github_enabled: bool = True
     hibp_enabled: bool = True
@@ -42,9 +42,9 @@ class Brand(BaseModel):
     typosquat_variants: List[str] = []
     slack_webhook: Optional[str] = None
     alert_email: Optional[str] = None
-    monitor_config: MonitorConfig = Field(default_factory=MonitorConfig)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    monitor_config: BrandMonitorConfig = Field(default_factory=BrandMonitorConfig)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     active: bool = True
 
     class Config:
@@ -65,26 +65,26 @@ class MatchDetails(BaseModel):
     """Details about keyword matches"""
     matched_keywords: List[str] = []
     matched_patterns: List[str] = []
-    match_type: str  # "exact" | "fuzzy" | "regex" | "domain_similarity"
+    match_type: str
     confidence_score: float
     match_locations: List[MatchLocation] = []
 
 
-class RawHit(BaseModel):
-    """Raw hit from a monitor"""
+class RawHitDocument(BaseModel):
+    """Raw hit document stored in MongoDB"""
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
     brand_id: PyObjectId
-    source: str  # "pastebin" | "github" | "hibp" | "reddit"
+    source: str
     source_url: str
     raw_content: str
     content_hash: str
     detected_at: datetime
     match_details: MatchDetails
     metadata: Dict[str, Any] = {}
-    processing_status: str = "pending"  # "pending" | "enriching" | "enriched" | "failed"
+    processing_status: str = "pending"
     deduplication_checked: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True
@@ -95,11 +95,11 @@ class RawHit(BaseModel):
 class MonitorRun(BaseModel):
     """Monitor run tracking"""
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    monitor_type: str  # "pastebin" | "github" | "hibp" | "reddit"
+    monitor_type: str
     brand_id: Optional[PyObjectId] = None
     started_at: datetime
     completed_at: Optional[datetime] = None
-    status: str  # "running" | "completed" | "failed"
+    status: str
     hits_found: int = 0
     hits_stored: int = 0
     error_message: Optional[str] = None
@@ -113,7 +113,6 @@ class MonitorRun(BaseModel):
         json_encoders = {ObjectId: str}
 
 
-# MongoDB Index Definitions
 MONGODB_INDEXES = {
     "brands": [
         {"keys": [("domain", 1)], "unique": True},
@@ -129,6 +128,7 @@ MONGODB_INDEXES = {
     "monitor_runs": [
         {"keys": [("monitor_type", 1), ("started_at", -1)]},
         {"keys": [("brand_id", 1), ("started_at", -1)]},
+        {"keys": [("status", 1), ("started_at", -1)]},
     ],
 }
 
@@ -142,5 +142,3 @@ async def create_indexes(db):
                 index_spec["keys"],
                 unique=index_spec.get("unique", False)
             )
-
-# Made with Bob

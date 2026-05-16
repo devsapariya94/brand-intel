@@ -6,6 +6,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
 
+MONITOR_TYPES = ["pastebin", "github", "hibp", "reddit"]
+
 
 class MonitorHealthChecker:
     """
@@ -27,7 +29,7 @@ class MonitorHealthChecker:
         
         health_by_monitor = {}
         
-        for monitor_type in ["pastebin", "github", "hibp", "reddit"]:
+        for monitor_type in MONITOR_TYPES:
             monitor_runs = [r for r in recent_runs if r['monitor_type'] == monitor_type]
             
             if not monitor_runs:
@@ -43,7 +45,7 @@ class MonitorHealthChecker:
             success_rate = successful_runs / total_runs if total_runs > 0 else 0
             
             avg_execution_time = sum(
-                r.get('execution_time_seconds', 0) 
+                r.get('execution_time_seconds', 0)
                 for r in monitor_runs if r['status'] == 'completed'
             ) / successful_runs if successful_runs > 0 else 0
             
@@ -84,8 +86,8 @@ class MonitorHealthChecker:
         }
     
     async def get_monitor_history(
-        self, 
-        monitor_type: str, 
+        self,
+        monitor_type: str,
         hours: int = 24
     ) -> List[Dict[str, Any]]:
         """
@@ -148,7 +150,7 @@ class MonitorHealthChecker:
         
         metrics_by_monitor = {}
         
-        for monitor_type in ["pastebin", "github", "hibp", "reddit"]:
+        for monitor_type in MONITOR_TYPES:
             monitor_runs = [r for r in completed_runs if r['monitor_type'] == monitor_type]
             
             if not monitor_runs:
@@ -181,7 +183,7 @@ class MonitorHealthChecker:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         stale_monitors = []
         
-        for monitor_type in ["pastebin", "github", "hibp", "reddit"]:
+        for monitor_type in MONITOR_TYPES:
             latest_run = await self.db.monitor_runs.find_one(
                 {"monitor_type": monitor_type},
                 sort=[("started_at", -1)]

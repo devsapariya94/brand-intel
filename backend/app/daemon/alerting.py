@@ -261,7 +261,7 @@ class AlertManager:
             logger.error(f"Failed to check recent alerts: {e}")
             return False
     
-    async def get_recent_alerts(self, hours: int = 24) -> list[Dict[str, Any]]:
+    async def get_recent_alerts(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Get recent alerts"""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         cursor = self.db.alerts.find(

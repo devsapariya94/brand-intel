@@ -103,26 +103,6 @@ class HIBPMonitor(BaseMonitor):
             response.raise_for_status()
             return await response.json()
     
-    @with_retry(RetryConfig(max_retries=3, base_delay=2.0))
-    async def _check_email_breach(self, email: str) -> List[Dict]:
-        """Check if a specific email has been breached"""
-        await self.rate_limiter.acquire()
-        self.increment_api_calls()
-        
-        session = await self._get_session()
-        async with session.get(
-            f"{self.base_url}/breachedaccount/{email}",
-            headers={
-                "hibp-api-key": self.api_key,
-                "User-Agent": "BrandIntel/1.0"
-            },
-            timeout=aiohttp.ClientTimeout(total=self.config.timeout_seconds)
-        ) as response:
-            if response.status == 404:
-                return []
-            response.raise_for_status()
-            return await response.json()
-    
     def _create_hit_from_breach(self, breach: Dict, brand: Dict) -> RawHit:
         """Convert HIBP breach to RawHit"""
         breach_date_str = breach.get('BreachDate', '')

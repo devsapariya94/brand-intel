@@ -1,7 +1,7 @@
 """Monitor orchestrator for coordinating all monitors"""
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 from .base import BaseMonitor
@@ -22,12 +22,16 @@ class MonitorOrchestrator:
         monitors: List[BaseMonitor],
         storage: RawHitStorage,
         matcher: KeywordMatcher,
-        db_client: AsyncIOMotorClient
+        db_client: AsyncIOMotorClient,
+        circuit_breaker: Optional = None,
+        dlq: Optional = None
     ):
         self.monitors = monitors
         self.storage = storage
         self.matcher = matcher
         self.db = db_client.brand_intel
+        self.circuit_breaker = circuit_breaker
+        self.dlq = dlq
     
     async def run_all_monitors(self, brand: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -36,23 +40,19 @@ class MonitorOrchestrator:
         Returns:
             Summary statistics
         """
-        # Filter enabled monitors based on brand config
         enabled_monitors = []
         for monitor in self.monitors:
             monitor_key = f"{monitor.name.lower().replace('monitor', '')}_enabled"
             if brand.get('monitor_config', {}).get(monitor_key, True):
                 enabled_monitors.append(monitor)
         
-        # Create tasks for parallel execution
         tasks = [
             self._run_single_monitor(monitor, brand)
             for monitor in enabled_monitors
         ]
         
-        # Execute in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Aggregate results
         total_hits = 0
         total_stored = 0
         errors = []
@@ -77,15 +77,19 @@ class MonitorOrchestrator:
         }
     
     async def _run_single_monitor(
-        self, 
-        monitor: BaseMonitor, 
+        self,
+        monitor: BaseMonitor,
         brand: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Run a single monitor with error handling and logging"""
+        """Run a single monitor with circuit breaker and error handling"""
+        monitor_type = monitor.name.lower().replace("monitor", "")
         
-        # Create monitor run record
+        if self.circuit_breaker and not self.circuit_breaker.should_allow(monitor_type):
+            logger.warning(f"Circuit breaker blocking {monitor_type} for brand {brand.get('name')}")
+            return {"hits_found": 0, "hits_stored": 0, "skipped": True}
+        
         run_record = {
-            "monitor_type": monitor.name.lower().replace("monitor", ""),
+            "monitor_type": monitor_type,
             "brand_id": brand['_id'],
             "started_at": datetime.now(timezone.utc),
             "status": "running",
@@ -102,17 +106,14 @@ class MonitorOrchestrator:
             execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             api_calls_made = monitor.get_api_calls_count() - api_calls_before
             
-            # Apply keyword matching
             matched_hits = []
             for hit in raw_hits:
                 match_result = self.matcher.match(hit.raw_content, brand)
                 if match_result.is_match():
                     matched_hits.append((hit, str(brand['_id']), match_result))
             
-            # Store hits
             storage_result = await self.storage.store_hits_batch(matched_hits)
             
-            # Update run record
             await self.db.monitor_runs.update_one(
                 {"_id": run_id},
                 {
@@ -127,13 +128,15 @@ class MonitorOrchestrator:
                 }
             )
             
+            if self.circuit_breaker:
+                self.circuit_breaker.record_success(monitor_type)
+            
             return {
                 "hits_found": len(raw_hits),
                 "hits_stored": storage_result['stored']
             }
             
         except Exception as e:
-            # Update run record with error
             await self.db.monitor_runs.update_one(
                 {"_id": run_id},
                 {
@@ -144,6 +147,24 @@ class MonitorOrchestrator:
                     }
                 }
             )
+            
+            if self.circuit_breaker:
+                self.circuit_breaker.record_failure(monitor_type, e)
+            
+            if self.dlq:
+                try:
+                    await self.dlq.add_to_dlq(
+                        hit_data={
+                            "brand_id": brand.get('_id'),
+                            "source": monitor_type,
+                            "error_context": str(e)
+                        },
+                        error=str(e),
+                        error_type="monitor_execution_failure"
+                    )
+                except Exception as dlq_err:
+                    logger.error(f"Failed to add to DLQ: {dlq_err}")
+            
             raise
     
     async def run_scheduled_scan(self, max_concurrent: int = 5) -> Dict[str, Any]:
@@ -187,7 +208,6 @@ class MonitorOrchestrator:
         Run monitors for a single brand by ID.
         Useful for manual triggers or testing.
         """
-        # Fetch brand
         from bson import ObjectId
         brand = await self.db.brands.find_one({"_id": ObjectId(brand_id)})
         
@@ -209,13 +229,18 @@ class MonitorOrchestrator:
         
         storage_stats = await self.storage.get_stats()
         
+        cb_stats = {}
+        if self.circuit_breaker:
+            cb_stats = self.circuit_breaker.get_stats()
+        
         return {
             "total_runs": total_runs,
             "completed_runs": completed_runs,
             "failed_runs": failed_runs,
             "running_runs": running_runs,
             "success_rate": completed_runs / total_runs if total_runs > 0 else 0,
-            "storage_stats": storage_stats
+            "storage_stats": storage_stats,
+            "circuit_breaker": cb_stats
         }
     
     async def close_all(self):

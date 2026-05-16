@@ -7,7 +7,6 @@ pymongo==4.6.0
 
 # Scraping
 aiohttp==3.9.1
-beautifulsoup4==4.12.2
 praw==7.7.1
 
 # Matching

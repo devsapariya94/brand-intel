@@ -4,7 +4,7 @@ from .base import BaseMonitor, MonitorConfig, RawHit
 from .orchestrator import MonitorOrchestrator
 from .detector import KeywordMatcher, MatchResult, Match
 from .storage import RawHitStorage
-from .health import MonitorHealthChecker
+from .health import MonitorHealthChecker, MONITOR_TYPES
 from .retry import with_retry, RetryConfig
 from .rate_limiter import RateLimiter
 from .pastebin import PastebinMonitor
@@ -22,6 +22,7 @@ __all__ = [
     "Match",
     "RawHitStorage",
     "MonitorHealthChecker",
+    "MONITOR_TYPES",
     "with_retry",
     "RetryConfig",
     "RateLimiter",

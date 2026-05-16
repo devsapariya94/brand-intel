@@ -2,7 +2,7 @@
 import asyncio
 import signal
 import logging
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -12,10 +12,13 @@ from .config import DaemonConfig
 from .circuit_breaker import CircuitBreaker
 from .alerting import AlertManager
 from .dlq import DeadLetterQueue
+from .healthcheck import HealthCheckServer
 from ..monitors.orchestrator import MonitorOrchestrator
 from ..monitors.storage import RawHitStorage
 from ..monitors.detector import KeywordMatcher
 from ..monitors.base import MonitorConfig
+from ..monitors.base import BaseMonitor
+from ..models.schemas import create_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +43,16 @@ class MonitoringDaemon:
         self.circuit_breaker: Optional[CircuitBreaker] = None
         self.alert_manager: Optional[AlertManager] = None
         self.dlq: Optional[DeadLetterQueue] = None
+        self.health_server: Optional[HealthCheckServer] = None
         self.running = False
         self.shutdown_event = asyncio.Event()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
     
     async def initialize(self):
         """Initialize all components"""
         logger.info("Initializing monitoring daemon...")
+        
+        self._loop = asyncio.get_running_loop()
         
         # Initialize database connection
         self.db_client = AsyncIOMotorClient(self.config.mongodb_uri)
@@ -57,6 +64,13 @@ class MonitoringDaemon:
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
             raise
+        
+        # Create MongoDB indexes
+        try:
+            await create_indexes(self.db_client.brand_intel)
+            logger.info("MongoDB indexes created/verified")
+        except Exception as e:
+            logger.warning(f"Failed to create indexes: {e}")
         
         # Initialize circuit breaker
         if self.config.circuit_breaker_enabled:
@@ -85,20 +99,31 @@ class MonitoringDaemon:
             logger.info("Dead letter queue initialized")
         
         # Initialize monitors
-        monitors = await self._create_monitors()
+        monitors = self._create_monitors()
         
         # Initialize storage and matcher
         storage = RawHitStorage(self.db_client)
         matcher = KeywordMatcher()
         
-        # Initialize orchestrator
+        # Initialize orchestrator with circuit breaker
         self.orchestrator = MonitorOrchestrator(
             monitors=monitors,
             storage=storage,
             matcher=matcher,
-            db_client=self.db_client
+            db_client=self.db_client,
+            circuit_breaker=self.circuit_breaker,
+            dlq=self.dlq
         )
         logger.info("Monitor orchestrator initialized")
+        
+        # Initialize health check server
+        if self.config.health_check_enabled:
+            self.health_server = HealthCheckServer(
+                db_client=self.db_client,
+                port=self.config.health_check_port
+            )
+            await self.health_server.start()
+            logger.info(f"Health check server enabled on port {self.config.health_check_port}")
         
         # Validate configuration
         warnings = self.config.validate_config()
@@ -107,8 +132,8 @@ class MonitoringDaemon:
         
         logger.info("Daemon initialization complete")
     
-    async def _create_monitors(self):
-        """Create monitor instances with configuration"""
+    def _create_monitors(self) -> List[BaseMonitor]:
+        """Create monitor instances with configuration and API keys"""
         from ..monitors.pastebin import PastebinMonitor
         from ..monitors.github import GitHubMonitor
         from ..monitors.reddit import RedditMonitor
@@ -123,7 +148,11 @@ class MonitoringDaemon:
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        monitors.append(PastebinMonitor(pastebin_config))
+        if self.config.pastebin_api_key:
+            monitors.append(PastebinMonitor(pastebin_config, api_key=self.config.pastebin_api_key))
+            logger.info("Pastebin monitor created")
+        else:
+            logger.warning("Pastebin monitor skipped: no API key configured")
         
         # GitHub
         github_config = MonitorConfig(
@@ -132,7 +161,11 @@ class MonitoringDaemon:
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        monitors.append(GitHubMonitor(github_config))
+        if self.config.github_token:
+            monitors.append(GitHubMonitor(github_config, github_token=self.config.github_token))
+            logger.info("GitHub monitor created")
+        else:
+            logger.warning("GitHub monitor skipped: no token configured")
         
         # Reddit
         reddit_config = MonitorConfig(
@@ -141,7 +174,15 @@ class MonitoringDaemon:
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        monitors.append(RedditMonitor(reddit_config))
+        if self.config.reddit_client_id and self.config.reddit_client_secret:
+            monitors.append(RedditMonitor(
+                reddit_config,
+                client_id=self.config.reddit_client_id,
+                client_secret=self.config.reddit_client_secret
+            ))
+            logger.info("Reddit monitor created")
+        else:
+            logger.warning("Reddit monitor skipped: no credentials configured")
         
         # HIBP
         hibp_config = MonitorConfig(
@@ -150,7 +191,15 @@ class MonitoringDaemon:
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        monitors.append(HIBPMonitor(hibp_config))
+        if self.config.hibp_api_key:
+            monitors.append(HIBPMonitor(
+                hibp_config,
+                api_key=self.config.hibp_api_key,
+                db_client=self.db_client
+            ))
+            logger.info("HIBP monitor created")
+        else:
+            logger.warning("HIBP monitor skipped: no API key configured")
         
         logger.info(f"Created {len(monitors)} monitors")
         return monitors
@@ -181,7 +230,7 @@ class MonitoringDaemon:
             # Check for high error rate
             if result['brands_scanned'] > 0:
                 error_rate = result['failed_scans'] / result['brands_scanned']
-                if error_rate > 0.5:  # More than 50% failures
+                if error_rate > 0.5:
                     await self.alert_manager.alert_high_error_rate(error_rate)
             
             # Process circuit breaker states
@@ -191,11 +240,10 @@ class MonitoringDaemon:
                     if stats['state'] == 'open':
                         await self.alert_manager.alert_monitor_down(
                             monitor_name=monitor_name,
-                            error=f"Circuit breaker open",
+                            error="Circuit breaker open",
                             failure_count=stats['failure_count']
                         )
                     elif stats['state'] == 'closed' and stats['failure_count'] == 0:
-                        # Monitor recovered
                         await self.alert_manager.alert_monitor_recovered(monitor_name)
             
             # Check DLQ overflow
@@ -221,7 +269,6 @@ class MonitoringDaemon:
         try:
             logger.info("Processing DLQ retry job...")
             
-            # Get pending items
             pending_items = await self.dlq.get_pending_items(
                 limit=50,
                 max_retry_count=self.config.dlq_max_retries
@@ -233,18 +280,51 @@ class MonitoringDaemon:
             
             logger.info(f"Found {len(pending_items)} pending DLQ items")
             
-            # TODO: Implement retry logic with actual processor
-            # For now, just log
             for item in pending_items:
-                logger.debug(f"DLQ item {item['_id']}: retry_count={item['retry_count']}")
+                try:
+                    await self.dlq.retry_item(
+                        dlq_id=str(item['_id']),
+                        processor_func=self._process_dlq_item
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to retry DLQ item {item['_id']}: {e}")
             
         except Exception as e:
             logger.error(f"DLQ retry job failed: {e}", exc_info=True)
     
+    async def _process_dlq_item(self, hit_data: dict):
+        """Process a single DLQ item by re-storing it"""
+        from ..monitors.base import RawHit
+        from ..monitors.detector import KeywordMatcher
+        
+        brand_id = hit_data.get('brand_id')
+        if not brand_id:
+            raise ValueError("DLQ item missing brand_id")
+        
+        brand = await self.db_client.brand_intel.brands.find_one({"_id": brand_id})
+        if not brand:
+            raise ValueError(f"Brand {brand_id} not found")
+        
+        raw_hit = RawHit(
+            source=hit_data.get('source', 'unknown'),
+            source_url=hit_data.get('source_url', ''),
+            raw_content=hit_data.get('raw_content', ''),
+            metadata=hit_data.get('metadata', {}),
+            detected_at=hit_data.get('detected_at', datetime.now(timezone.utc))
+        )
+        
+        matcher = KeywordMatcher()
+        match_result = matcher.match(raw_hit.raw_content, brand)
+        
+        if not match_result.is_match():
+            raise ValueError("Hit no longer matches brand keywords")
+        
+        storage = RawHitStorage(self.db_client)
+        await storage.store_hit(raw_hit, str(brand_id), match_result)
+    
     async def health_check_job(self):
         """Periodic health check"""
         try:
-            # Check for stale monitors (no runs in 2 hours)
             from ..monitors.health import MonitorHealthChecker
             health_checker = MonitorHealthChecker(self.db_client)
             
@@ -264,21 +344,41 @@ class MonitoringDaemon:
         except Exception as e:
             logger.error(f"Health check job failed: {e}", exc_info=True)
     
+    async def cleanup_stale_runs_job(self):
+        """Clean up stale 'running' monitor_runs records from crashes"""
+        try:
+            cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(hours=1)
+            result = await self.db_client.brand_intel.monitor_runs.update_many(
+                {
+                    "status": "running",
+                    "started_at": {"$lt": cutoff}
+                },
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error_message": "Stale run - process crashed",
+                        "completed_at": datetime.now(timezone.utc)
+                    }
+                }
+            )
+            if result.modified_count > 0:
+                logger.info(f"Cleaned up {result.modified_count} stale monitor runs")
+        except Exception as e:
+            logger.error(f"Stale run cleanup failed: {e}", exc_info=True)
+    
     def setup_scheduler(self):
         """Configure scheduled jobs"""
-        # Main scan job
         self.scheduler.add_job(
             self.scan_job,
             trigger=IntervalTrigger(minutes=self.config.scan_interval_minutes),
             id='monitor_scan',
             name='Monitor all brands',
             replace_existing=True,
-            max_instances=1,  # Prevent overlapping runs
-            coalesce=True  # If missed, run once
+            max_instances=1,
+            coalesce=True
         )
         logger.info(f"Scheduled scan job every {self.config.scan_interval_minutes} minutes")
         
-        # DLQ retry job (every 30 minutes)
         if self.dlq:
             self.scheduler.add_job(
                 self.dlq_retry_job,
@@ -290,7 +390,6 @@ class MonitoringDaemon:
             )
             logger.info("Scheduled DLQ retry job every 30 minutes")
         
-        # Health check job (every hour)
         self.scheduler.add_job(
             self.health_check_job,
             trigger=IntervalTrigger(hours=1),
@@ -300,16 +399,32 @@ class MonitoringDaemon:
             max_instances=1
         )
         logger.info("Scheduled health check job every hour")
+        
+        self.scheduler.add_job(
+            self.cleanup_stale_runs_job,
+            trigger=IntervalTrigger(hours=6),
+            id='cleanup_stale_runs',
+            name='Cleanup stale monitor runs',
+            replace_existing=True,
+            max_instances=1
+        )
+        logger.info("Scheduled stale run cleanup job every 6 hours")
     
     def setup_signal_handlers(self):
         """Setup graceful shutdown on signals"""
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-            asyncio.create_task(self.shutdown())
+        loop = asyncio.get_running_loop()
         
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(
+                sig,
+                lambda s=sig: asyncio.create_task(self._handle_signal(s))
+            )
         logger.info("Signal handlers configured")
+    
+    async def _handle_signal(self, signum: int):
+        """Handle received signal safely within event loop"""
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        await self.shutdown()
     
     async def shutdown(self):
         """Graceful shutdown"""
@@ -322,22 +437,22 @@ class MonitoringDaemon:
         
         self.running = False
         
-        # Stop scheduler
         if self.scheduler.running:
             self.scheduler.shutdown(wait=True)
             logger.info("Scheduler stopped")
         
-        # Close orchestrator resources
+        if self.health_server:
+            await self.health_server.stop()
+            logger.info("Health check server stopped")
+        
         if self.orchestrator:
             await self.orchestrator.close_all()
             logger.info("Monitor resources closed")
         
-        # Close alert manager
         if self.alert_manager:
             await self.alert_manager.close()
             logger.info("Alert manager closed")
         
-        # Close database connection
         if self.db_client:
             self.db_client.close()
             logger.info("Database connection closed")
@@ -348,14 +463,11 @@ class MonitoringDaemon:
     async def run(self):
         """Main daemon loop"""
         try:
-            # Initialize
             await self.initialize()
             
-            # Setup scheduler and signals
             self.setup_scheduler()
             self.setup_signal_handlers()
             
-            # Start scheduler
             self.running = True
             self.scheduler.start()
             
@@ -367,11 +479,9 @@ class MonitoringDaemon:
             logger.info(f"Alerting: {'configured' if self.config.slack_webhook_url else 'not configured'}")
             logger.info("=" * 60)
             
-            # Run first scan immediately
             logger.info("Running initial scan...")
             await self.scan_job()
             
-            # Keep running until shutdown
             await self.shutdown_event.wait()
             
         except KeyboardInterrupt:
@@ -381,5 +491,3 @@ class MonitoringDaemon:
             logger.critical(f"Fatal error in daemon: {e}", exc_info=True)
             await self.shutdown()
             raise
-
-# Made with Bob

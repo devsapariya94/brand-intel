@@ -1,6 +1,6 @@
 """Configuration management for monitoring daemon"""
 import os
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -178,7 +178,7 @@ class DaemonConfig(BaseModel):
     reddit_client_secret: Optional[str] = Field(default=None)
     hibp_api_key: Optional[str] = Field(default=None)
     
-    def validate_config(self) -> list[str]:
+    def validate_config(self) -> List[str]:
         """Validate configuration and return list of warnings"""
         warnings = []
         

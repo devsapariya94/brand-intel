@@ -3,7 +3,7 @@ import hashlib
 import logging
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from .detector import MatchResult
 from .base import RawHit
@@ -81,8 +81,8 @@ class RawHitStorage:
         return str(result.inserted_id)
     
     async def store_hits_batch(
-        self, 
-        hits: List[tuple]
+        self,
+        hits: List[Tuple[RawHit, str, 'MatchResult']]
     ) -> Dict[str, Any]:
         """
         Store multiple hits in a batch operation.

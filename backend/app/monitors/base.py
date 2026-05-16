@@ -71,7 +71,7 @@ class BaseMonitor(ABC):
             return hits
             
         except Exception as e:
-            logger.error(f"Error in {self.name}: {str(e)}")
+            logger.error(f"Error in {self.name}: {str(e)}", exc_info=True)
             raise
     
     async def close(self):
