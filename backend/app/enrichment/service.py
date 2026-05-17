@@ -31,6 +31,11 @@ Analyze the raw content and determine:
 5. What action should be taken? (recommended_action: ALERT, SUPPRESS, ESCALATE_HUMAN)
 6. Explain your reasoning. (reasoning)
 
+GUIDANCE FOR recommended_action:
+- ALERT: Only use when this is a CLEAR, CONFIRMED threat (e.g., actual credentials, API keys, PII, source code, database dumps exposed). The content must contain real sensitive data, not just mentions or discussions about security.
+- SUPPRESS: Use when this is a FALSE POSITIVE (e.g., security blog posts, documentation about best practices, code examples without real secrets, news articles mentioning the brand, legitimate security disclosures without actual leaked data).
+- ESCALATE_HUMAN: Use when you are UNCERTAIN - the content is suspicious but you cannot confirm if it contains real sensitive data, or it requires human judgment to verify authenticity.
+
 Return ONLY a valid JSON object with this exact structure:
 {
     "is_threat": true/false,
@@ -263,15 +268,35 @@ Evaluate this hit and return your analysis as JSON."""
             return None
     
     def _apply_thresholds(self, evaluation: EvaluationResult) -> AlertDecision:
-        """Apply confidence thresholds to make final decision"""
-        if evaluation.confidence >= 0.85 and evaluation.recommended_action == RecommendedAction.ALERT:
-            return AlertDecision.ALERT
-        elif evaluation.confidence >= 0.70:
-            return AlertDecision.ALERT
-        elif evaluation.confidence >= 0.60:
-            return AlertDecision.ESCALATE
-        else:
-            return AlertDecision.SUPPRESS
+        """Apply confidence thresholds and respect LLM recommended_action"""
+        action = evaluation.recommended_action
+        confidence = evaluation.confidence
+
+        # SUPPRESS: Respect LLM's suppress recommendation unless confidence is very low
+        if action == RecommendedAction.SUPPRESS:
+            if confidence >= 0.50:
+                return AlertDecision.SUPPRESS
+            else:
+                return AlertDecision.ESCALATE
+
+        # ESCALATE_HUMAN: Send to human review
+        if action == RecommendedAction.ESCALATE_HUMAN:
+            if confidence >= 0.60:
+                return AlertDecision.ESCALATE
+            else:
+                return AlertDecision.SUPPRESS
+
+        # ALERT: Only alert when LLM recommends it AND confidence is high enough
+        if action == RecommendedAction.ALERT:
+            if confidence >= 0.70:
+                return AlertDecision.ALERT
+            elif confidence >= 0.50:
+                return AlertDecision.ESCALATE
+            else:
+                return AlertDecision.SUPPRESS
+
+        # Fallback: unknown action, escalate for safety
+        return AlertDecision.ESCALATE
     
     async def _store_result(self, result: EnrichmentResult, alert_context: dict = None):
         """Store enrichment result in MongoDB"""

@@ -1,4 +1,4 @@
 #!/bin/bash
-# Start only the Streamlit frontend
+# Start the React frontend
 cd frontend
-streamlit run app.py --server.port 8501
+npm run dev

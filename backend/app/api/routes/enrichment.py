@@ -126,6 +126,8 @@ async def get_llm_call_stats(
             "_id": {"provider": "$provider", "model": "$model"},
             "count": {"$sum": 1},
             "failures": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
+            "total_latency": {"$sum": "$latency_ms"},
+            "latency_count": {"$sum": {"$cond": [{"$gte": ["$latency_ms", 0]}, 1, 0]}},
         }},
         {"$sort": {"count": -1}},
     ]).to_list(length=None)
@@ -140,8 +142,9 @@ async def get_llm_call_stats(
             {
                 "provider": item["_id"].get("provider"),
                 "model": item["_id"].get("model"),
-                "count": item["count"],
+                "calls": item["count"],
                 "failures": item["failures"],
+                "avg_latency": round(item["total_latency"] / item["latency_count"], 1) if item.get("latency_count") else 0,
             }
             for item in by_provider_result
         ],

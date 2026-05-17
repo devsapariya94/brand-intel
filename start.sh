@@ -59,11 +59,11 @@ cd ..
 # Wait for API to start
 sleep 3
 
-# Start Streamlit frontend
+# Start React frontend
 echo ""
-echo "Starting Streamlit frontend on port 8501..."
+echo "Starting React frontend on port 3000..."
 cd frontend
-streamlit run app.py --server.port 8501 --server.headless true &
+npm run dev &
 FRONTEND_PID=$!
 cd ..
 
@@ -72,7 +72,7 @@ echo "========================================="
 echo "  Services Started"
 echo "========================================="
 echo "  API:       http://localhost:8000"
-echo "  Frontend:  http://localhost:8501"
+echo "  Frontend:  http://localhost:3000"
 echo "  API Docs:  http://localhost:8000/docs"
 echo ""
 echo "Press Ctrl+C to stop all services"
