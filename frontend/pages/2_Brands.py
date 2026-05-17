@@ -123,4 +123,4 @@ with tab2:
             st.success(f"Brand '{new_brand['name']}' created successfully!")
             st.rerun()
         else:
-            st.error(f"Failed to create brand: {result.get('error', result.get('detail', 'Unknown error'))")
+            st.error(f"Failed to create brand: {result.get('error', result.get('detail', 'Unknown error'))}")

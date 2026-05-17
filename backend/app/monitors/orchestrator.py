@@ -24,7 +24,8 @@ class MonitorOrchestrator:
         matcher: KeywordMatcher,
         db_client: AsyncIOMotorClient,
         circuit_breaker: Optional = None,
-        dlq: Optional = None
+        dlq: Optional = None,
+        enrichment_service: Optional = None
     ):
         self.monitors = monitors
         self.storage = storage
@@ -32,6 +33,7 @@ class MonitorOrchestrator:
         self.db = db_client.brand_intel
         self.circuit_breaker = circuit_breaker
         self.dlq = dlq
+        self.enrichment_service = enrichment_service
     
     async def run_all_monitors(self, brand: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -55,6 +57,8 @@ class MonitorOrchestrator:
         
         total_hits = 0
         total_stored = 0
+        total_enriched = 0
+        stored_ids = []
         errors = []
         
         for i, result in enumerate(results):
@@ -66,12 +70,16 @@ class MonitorOrchestrator:
             else:
                 total_hits += result['hits_found']
                 total_stored += result['hits_stored']
+                total_enriched += result.get('hits_enriched', 0)
+                stored_ids.extend(result.get("stored_ids", []))
         
         return {
             "brand_id": str(brand['_id']),
             "monitors_run": len(enabled_monitors),
             "total_hits_found": total_hits,
             "total_hits_stored": total_stored,
+            "total_hits_enriched": total_enriched,
+            "stored_ids": stored_ids,
             "errors": errors,
             "completed_at": datetime.now(timezone.utc)
         }
@@ -113,6 +121,16 @@ class MonitorOrchestrator:
                     matched_hits.append((hit, str(brand['_id']), match_result))
             
             storage_result = await self.storage.store_hits_batch(matched_hits)
+
+            enriched_count = 0
+            if self.enrichment_service and storage_result.get("stored_ids"):
+                for hit_id in storage_result["stored_ids"]:
+                    try:
+                        result = await self.enrichment_service.process_hit(hit_id, str(brand["_id"]))
+                        if result:
+                            enriched_count += 1
+                    except Exception as enrichment_err:
+                        logger.error(f"Failed to enrich hit {hit_id}: {enrichment_err}", exc_info=True)
             
             await self.db.monitor_runs.update_one(
                 {"_id": run_id},
@@ -122,6 +140,7 @@ class MonitorOrchestrator:
                         "status": "completed",
                         "hits_found": len(raw_hits),
                         "hits_stored": storage_result['stored'],
+                        "hits_enriched": enriched_count,
                         "execution_time_seconds": execution_time,
                         "api_calls_made": api_calls_made
                     }
@@ -133,7 +152,9 @@ class MonitorOrchestrator:
             
             return {
                 "hits_found": len(raw_hits),
-                "hits_stored": storage_result['stored']
+                "hits_stored": storage_result['stored'],
+                "hits_enriched": enriched_count,
+                "stored_ids": storage_result.get("stored_ids", [])
             }
             
         except Exception as e:

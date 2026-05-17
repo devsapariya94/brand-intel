@@ -42,14 +42,22 @@ def brand_form(brand: dict = None, submit_label: str = "Create Brand"):
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                monitor_pastebin = st.checkbox("Pastebin Monitor", 
-                                              value=brand.get("monitor_config", {}).get("pastebin", True) if brand else True)
-            with col2:
                 monitor_github = st.checkbox("GitHub Monitor",
-                                            value=brand.get("monitor_config", {}).get("github", True) if brand else True)
+                                            value=brand.get("monitor_config", {}).get("github_enabled", True) if brand else True)
+            with col2:
+                monitor_hn = st.checkbox("HackerNews (Free)",
+                                        value=brand.get("monitor_config", {}).get("hackernews_enabled", True) if brand else True)
             with col3:
-                monitor_reddit = st.checkbox("Reddit Monitor",
-                                            value=brand.get("monitor_config", {}).get("reddit", True) if brand else True)
+                monitor_ransom = st.checkbox("Ransomware (Free)",
+                                            value=brand.get("monitor_config", {}).get("ransomware_enabled", True) if brand else True)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                monitor_xon = st.checkbox("XposedOrNot (Free)",
+                                         value=brand.get("monitor_config", {}).get("xposedornot_enabled", True) if brand else True)
+            with col2:
+                monitor_intelx = st.checkbox("Intelligence X",
+                                            value=brand.get("monitor_config", {}).get("intelx_enabled", True) if brand else True)
         
         submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
         
@@ -81,10 +89,11 @@ def brand_form(brand: dict = None, submit_label: str = "Create Brand"):
                 "slack_webhook": slack_webhook if slack_webhook else None,
                 "alert_email": alert_email if alert_email else None,
                 "monitor_config": {
-                    "pastebin": monitor_pastebin,
-                    "github": monitor_github,
-                    "reddit": monitor_reddit,
-                    "hibp": True
+                    "github_enabled": monitor_github,
+                    "hackernews_enabled": monitor_hn,
+                    "ransomware_enabled": monitor_ransom,
+                    "xposedornot_enabled": monitor_xon,
+                    "intelx_enabled": monitor_intelx
                 }
             }
     

@@ -35,6 +35,7 @@ class MonitorStatus(BaseModel):
     """Monitor status information"""
     name: str
     type: str
+    status: str = "unknown"
     enabled: bool
     available: bool
     rate_limit_remaining: int
@@ -67,6 +68,7 @@ class MonitorResultResponse(BaseModel):
     brand_name: str
     hits_found: int
     hits_stored: int
+    hits_enriched: int = 0
     execution_time_seconds: float
     status: str
     started_at: datetime
@@ -82,6 +84,7 @@ class ScanResultResponse(BaseModel):
     failed_scans: int
     total_hits_found: int
     total_hits_stored: int
+    total_hits_enriched: int = 0
     results: List[MonitorResultResponse]
     started_at: datetime
     completed_at: datetime
@@ -120,6 +123,7 @@ class RawHitResponse(BaseModel):
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     notes: Optional[str] = None
+    enrichment: Optional[Dict[str, Any]] = None
 
 
 class PaginatedHitsResponse(BaseModel):

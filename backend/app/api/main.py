@@ -1,10 +1,16 @@
 """FastAPI application for Brand Intel monitoring system"""
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+
+# Load .env file
+env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+load_dotenv(env_path)
 
 from .routes import (
     brands_router,
@@ -22,7 +28,10 @@ from ..monitors.detector import KeywordMatcher
 from ..monitors.base import MonitorConfig
 from ..daemon.circuit_breaker import CircuitBreaker
 from ..daemon.dlq import DeadLetterQueue
+from ..daemon.alerting import AlertManager
 from ..enrichment.service import EnrichmentService
+from ..models.schemas import create_indexes
+from ..models.enrichment_schemas import create_enrichment_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,8 @@ async def lifespan(app: FastAPI):
     # Test database connection
     try:
         await db_client.admin.command('ping')
+        await create_indexes(db_client.brand_intel)
+        await create_enrichment_indexes(db_client.brand_intel)
         logger.info("Database connection successful")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
@@ -70,6 +81,26 @@ async def lifespan(app: FastAPI):
         dependencies.set_dlq(dlq)
         logger.info("DLQ initialized")
     
+    # Initialize alert manager
+    alert_manager = AlertManager(
+        db_client=db_client,
+        slack_webhook_url=config.slack_webhook_url,
+        alert_email=config.alert_email,
+        failure_threshold=config.alert_failure_threshold
+    )
+    await alert_manager.initialize()
+    logger.info("Alert manager initialized")
+    
+    # Initialize enrichment service
+    enrichment_svc = None
+    if config.enrichment_enabled and (config.llm_api_key or config.anthropic_api_key):
+        try:
+            enrichment_svc = EnrichmentService(db_client, config, alert_manager=alert_manager)
+            dependencies.set_enrichment_service(enrichment_svc)
+            logger.info("Enrichment service initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize enrichment service: {e}")
+
     # Initialize monitors
     monitors = _create_monitors(config, db_client)
     
@@ -82,20 +113,11 @@ async def lifespan(app: FastAPI):
         matcher=matcher,
         db_client=db_client,
         circuit_breaker=circuit_breaker if config.circuit_breaker_enabled else None,
-        dlq=dlq if config.dlq_enabled else None
+        dlq=dlq if config.dlq_enabled else None,
+        enrichment_service=enrichment_svc
     )
     dependencies.set_orchestrator(orchestrator)
     logger.info("Orchestrator initialized")
-    
-    # Initialize enrichment service
-    enrichment_svc = None
-    if config.enrichment_enabled and (config.llm_api_key or config.anthropic_api_key):
-        try:
-            enrichment_svc = EnrichmentService(db_client, config)
-            dependencies.set_enrichment_service(enrichment_svc)
-            logger.info("Enrichment service initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize enrichment service: {e}")
     
     logger.info("Brand Intel API started successfully")
     
@@ -109,6 +131,9 @@ async def lifespan(app: FastAPI):
     if orchestrator:
         await orchestrator.close_all()
     
+    if alert_manager:
+        await alert_manager.close()
+    
     if db_client:
         db_client.close()
     
@@ -117,23 +142,13 @@ async def lifespan(app: FastAPI):
 
 def _create_monitors(config: DaemonConfig, db_client=None):
     """Create monitor instances"""
-    from ..monitors.pastebin import PastebinMonitor
     from ..monitors.github import GitHubMonitor
-    from ..monitors.reddit import RedditMonitor
-    from ..monitors.hibp import HIBPMonitor
+    from ..monitors.hackernews import HackerNewsMonitor
+    from ..monitors.ransomware import RansomwareMonitor
+    from ..monitors.xposedornot import XposedOrNotMonitor
+    from ..monitors.intelx import IntelXMonitor
     
     monitors = []
-    
-    # Pastebin
-    if config.pastebin_api_key:
-        pastebin_config = MonitorConfig(
-            enabled=True,
-            rate_limit_per_minute=config.pastebin_rate_limit,
-            timeout_seconds=config.monitor_timeout_seconds,
-            max_retries=config.max_retries
-        )
-        monitors.append(PastebinMonitor(pastebin_config, api_key=config.pastebin_api_key))
-        logger.info("Pastebin monitor created")
     
     # GitHub
     if config.github_token:
@@ -146,35 +161,46 @@ def _create_monitors(config: DaemonConfig, db_client=None):
         monitors.append(GitHubMonitor(github_config, github_token=config.github_token))
         logger.info("GitHub monitor created")
     
-    # Reddit
-    if config.reddit_client_id and config.reddit_client_secret:
-        reddit_config = MonitorConfig(
-            enabled=True,
-            rate_limit_per_minute=config.reddit_rate_limit,
-            timeout_seconds=config.monitor_timeout_seconds,
-            max_retries=config.max_retries
-        )
-        monitors.append(RedditMonitor(
-            reddit_config,
-            client_id=config.reddit_client_id,
-            client_secret=config.reddit_client_secret
-        ))
-        logger.info("Reddit monitor created")
+    # Hacker News (free, no API key)
+    hn_config = MonitorConfig(
+        enabled=True,
+        rate_limit_per_minute=60,
+        timeout_seconds=config.monitor_timeout_seconds,
+        max_retries=config.max_retries
+    )
+    monitors.append(HackerNewsMonitor(hn_config))
+    logger.info("HackerNews monitor created")
     
-    # HIBP
-    if config.hibp_api_key:
-        hibp_config = MonitorConfig(
+    # Ransomware.live (free, no API key)
+    ransom_config = MonitorConfig(
+        enabled=True,
+        rate_limit_per_minute=1,
+        timeout_seconds=config.monitor_timeout_seconds,
+        max_retries=config.max_retries
+    )
+    monitors.append(RansomwareMonitor(ransom_config))
+    logger.info("Ransomware monitor created")
+
+    # XposedOrNot (free, no API key for basic checks)
+    xon_config = MonitorConfig(
+        enabled=True,
+        rate_limit_per_minute=30,
+        timeout_seconds=config.monitor_timeout_seconds,
+        max_retries=config.max_retries
+    )
+    monitors.append(XposedOrNotMonitor(xon_config))
+    logger.info("XposedOrNot monitor created")
+
+    # Intelligence X (free tier, requires API key)
+    if config.intelx_api_key:
+        intelx_config = MonitorConfig(
             enabled=True,
-            rate_limit_per_minute=config.hibp_rate_limit,
+            rate_limit_per_minute=10,
             timeout_seconds=config.monitor_timeout_seconds,
             max_retries=config.max_retries
         )
-        monitors.append(HIBPMonitor(
-            hibp_config,
-            api_key=config.hibp_api_key,
-            db_client=db_client
-        ))
-        logger.info("HIBP monitor created")
+        monitors.append(IntelXMonitor(intelx_config, api_key=config.intelx_api_key))
+        logger.info("IntelX monitor created")
     
     logger.info(f"Created {len(monitors)} monitors")
     return monitors

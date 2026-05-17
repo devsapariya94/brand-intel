@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 logger = logging.getLogger(__name__)
 
-MONITOR_TYPES = ["pastebin", "github", "hibp", "reddit"]
+MONITOR_TYPES = ["github", "hackernews", "ransomware", "xposedornot", "intelx"]
 
 
 class MonitorHealthChecker:

@@ -77,7 +77,7 @@ def source_bar_chart(by_source: dict, title: str = "Hits by Source"):
     fig = go.Figure(data=[go.Bar(
         x=list(by_source.keys()),
         y=list(by_source.values()),
-        marker_color=["#1E88E5", "#43A047", "#FB8C00", "#8E24AA"][:len(by_source)]
+        marker_color=["#1E88E5", "#43A047", "#FB8C00", "#8E24AA", "#E91E63", "#00BCD4"][:len(by_source)]
     )])
     
     fig.update_layout(

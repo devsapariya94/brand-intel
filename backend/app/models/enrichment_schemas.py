@@ -56,6 +56,7 @@ class EvaluationResult(BaseModel):
 
     class Config:
         use_enum_values = True
+        protected_namespaces = ()
 
 
 class EnrichmentResult(BaseModel):
@@ -132,6 +133,12 @@ ENRICHMENT_INDEXES = {
         {"keys": [("hit_id", 1)]},
         {"keys": [("status", 1), ("created_at", 1)]},
         {"keys": [("assigned_to", 1), ("status", 1)]},
+    ],
+    "llm_calls": [
+        {"keys": [("created_at", -1)]},
+        {"keys": [("hit_id", 1)]},
+        {"keys": [("provider", 1), ("model", 1), ("created_at", -1)]},
+        {"keys": [("status", 1), ("created_at", -1)]},
     ],
 }
 

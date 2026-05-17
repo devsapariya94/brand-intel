@@ -8,26 +8,31 @@ from bson import ObjectId
 class PyObjectId(ObjectId):
     """Custom ObjectId type for Pydantic"""
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        from pydantic_core import core_schema
+        return core_schema.with_info_plain_validator_function(
+            cls._validate,
+            serialization=core_schema.to_string_ser_schema(),
+        )
 
     @classmethod
-    def validate(cls, v):
+    def _validate(cls, v, _):
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid ObjectId")
         return ObjectId(v)
 
     @classmethod
-    def __modify_schema__(cls, field_schema):
-        field_schema.update(type="string")
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        return {"type": "string"}
 
 
 class BrandMonitorConfig(BaseModel):
     """Per-brand monitor enablement configuration"""
-    pastebin_enabled: bool = True
     github_enabled: bool = True
-    hibp_enabled: bool = True
-    reddit_enabled: bool = True
+    hackernews_enabled: bool = True
+    ransomware_enabled: bool = True
+    xposedornot_enabled: bool = True
+    intelx_enabled: bool = True
     scan_frequency_minutes: int = 15
 
 

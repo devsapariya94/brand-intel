@@ -38,10 +38,7 @@ class DaemonConfig(BaseModel):
     )
 
     # Monitor Rate Limits (requests per minute)
-    pastebin_rate_limit: int = Field(default=60, ge=1)
     github_rate_limit: int = Field(default=30, ge=1)
-    reddit_rate_limit: int = Field(default=60, ge=1)
-    hibp_rate_limit: int = Field(default=60, ge=1)
 
     # Timeouts
     monitor_timeout_seconds: int = Field(default=30, ge=5, le=300)
@@ -107,11 +104,8 @@ class DaemonConfig(BaseModel):
     )
 
     # API Keys
-    pastebin_api_key: Optional[str] = Field(default=None)
     github_token: Optional[str] = Field(default=None)
-    reddit_client_id: Optional[str] = Field(default=None)
-    reddit_client_secret: Optional[str] = Field(default=None)
-    hibp_api_key: Optional[str] = Field(default=None)
+    intelx_api_key: Optional[str] = Field(default=None)
 
     # Enrichment
     enrichment_enabled: bool = Field(default=True)
@@ -139,10 +133,7 @@ class DaemonConfig(BaseModel):
             max_concurrent_monitors=int(os.getenv("MAX_CONCURRENT_MONITORS", "4")),
 
             # Rate Limits
-            pastebin_rate_limit=int(os.getenv("PASTEBIN_RATE_LIMIT", "60")),
             github_rate_limit=int(os.getenv("GITHUB_RATE_LIMIT", "30")),
-            reddit_rate_limit=int(os.getenv("REDDIT_RATE_LIMIT", "60")),
-            hibp_rate_limit=int(os.getenv("HIBP_RATE_LIMIT", "60")),
 
             # Timeouts
             monitor_timeout_seconds=int(os.getenv("MONITOR_TIMEOUT_SECONDS", "30")),
@@ -176,11 +167,8 @@ class DaemonConfig(BaseModel):
             dlq_max_retries=int(os.getenv("DLQ_MAX_RETRIES", "3")),
 
             # API Keys
-            pastebin_api_key=os.getenv("PASTEBIN_API_KEY"),
             github_token=os.getenv("GITHUB_TOKEN"),
-            reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
-            reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-            hibp_api_key=os.getenv("HIBP_API_KEY"),
+            intelx_api_key=os.getenv("INTELX_API_KEY"),
 
             # Enrichment
             enrichment_enabled=os.getenv("ENRICHMENT_ENABLED", "true").lower() == "true",
@@ -226,17 +214,8 @@ class DaemonConfig(BaseModel):
         if self.circuit_breaker_failure_threshold < 3:
             warnings.append("Low circuit breaker threshold may cause false positives")
 
-        if not self.pastebin_api_key:
-            warnings.append("PASTEBIN_API_KEY not set - Pastebin monitor will fail")
-
         if not self.github_token:
             warnings.append("GITHUB_TOKEN not set - GitHub monitor will fail")
-
-        if not self.reddit_client_id or not self.reddit_client_secret:
-            warnings.append("Reddit credentials not set - Reddit monitor will fail")
-
-        if not self.hibp_api_key:
-            warnings.append("HIBP_API_KEY not set - HIBP monitor will fail")
 
         if self.enrichment_enabled and not self.use_anthropic:
             if not self.llm_api_key:

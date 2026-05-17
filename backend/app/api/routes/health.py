@@ -162,6 +162,8 @@ async def get_metrics(
     if dlq:
         dlq_stats = await dlq.get_stats()
         dlq_pending = dlq_stats.get("pending", 0)
+
+    enrichment_queue = await db.raw_hits.count_documents({"processing_status": "pending"})
     
     return MetricsResponse(
         total_brands=total_brands,
@@ -172,7 +174,7 @@ async def get_metrics(
         success_rate=success_rate,
         avg_execution_time=avg_execution_time,
         dlq_pending=dlq_pending,
-        enrichment_queue=0  # Placeholder
+        enrichment_queue=enrichment_queue
     )
 
 

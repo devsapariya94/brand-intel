@@ -38,7 +38,11 @@ with st.expander("Manual Trigger", expanded=True):
             with st.spinner("Triggering monitors..."):
                 result = api.trigger_all_monitors(brand_id)
             if result and "error" not in result:
-                st.success(f"Scan complete: {result.get('total_hits_found', 0)} hits found")
+                st.success(
+                    f"Scan complete: {result.get('total_hits_found', 0)} hits found, "
+                    f"{result.get('total_hits_stored', 0)} stored, "
+                    f"{result.get('total_hits_enriched', 0)} enriched"
+                )
                 st.rerun()
             else:
                 st.error(f"Trigger failed: {result}")
@@ -79,7 +83,11 @@ for i, monitor in enumerate(monitors):
                     with st.spinner(f"Triggering {monitor.get('name')}..."):
                         result = api.trigger_monitor(monitor_type, brand_options[selected_brand])
                     if result and "error" not in result:
-                        st.success(f"Found {result.get('hits_found', 0)} hits")
+                        st.success(
+                            f"Found {result.get('hits_found', 0)} hits, "
+                            f"{result.get('hits_stored', 0)} stored, "
+                            f"{result.get('hits_enriched', 0)} enriched"
+                        )
                     else:
                         st.error(f"Trigger failed")
 

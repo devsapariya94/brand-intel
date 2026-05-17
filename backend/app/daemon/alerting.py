@@ -176,26 +176,72 @@ class AlertManager:
         await self._send_alert(message, alert_type="dlq_overflow")
         logger.warning(f"Alert sent: DLQ overflow with {dlq_count} items")
     
+    async def alert_threat_detected(
+        self,
+        hit_id: str,
+        brand_name: str,
+        source: str,
+        source_url: str,
+        severity: str,
+        confidence: float,
+        threat_types: list,
+        reasoning: str,
+        matched_keywords: list,
+    ):
+        recent = await self._check_recent_alert(
+            alert_type="threat_detected",
+            identifier=hit_id,
+            hours=24
+        )
+        if recent:
+            return
+        
+        emoji_map = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
+        emoji = emoji_map.get(severity.upper() if hasattr(severity, 'upper') else str(severity), "⚪")
+        severity_str = severity.value if hasattr(severity, 'value') else str(severity)
+        
+        threats_formatted = "\n".join(f"  • {t}" for t in threat_types) if threat_types else "  • unspecified"
+        keywords_formatted = ", ".join(matched_keywords) if matched_keywords else "none"
+        source_link = f"<{source_url}|{source}>" if source_url else source
+        
+        message = (
+            f"{emoji} *Threat Detected: {brand_name}*\n\n"
+            f"*Severity:* {severity_str}  |  *Confidence:* {confidence:.0%}  |  *Source:* {source_link}\n\n"
+            f"*Threat Types:*\n{threats_formatted}\n\n"
+            f"*Matched Keywords:* {keywords_formatted}\n\n"
+            f"*Analysis:*\n{reasoning[:500]}\n\n"
+            f"_{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+        )
+        
+        await self._send_alert(
+            message,
+            alert_type="threat_detected",
+            extra_data={
+                "hit_id": hit_id,
+                "alert_identifier": hit_id,
+                "brand_name": brand_name,
+                "severity": severity_str,
+                "confidence": confidence,
+                "source": source,
+            }
+        )
+        logger.info(f"Threat alert sent: {brand_name} ({severity_str}, {confidence:.0%}) — hit={hit_id}")
+    
     async def _send_alert(
         self,
         message: str,
         alert_type: str,
-        monitor_name: Optional[str] = None
+        monitor_name: Optional[str] = None,
+        extra_data: Optional[dict] = None,
     ):
         """Send alert via configured channels"""
-        # Send to Slack
         if self.slack_webhook_url and self.session:
             try:
                 await self._send_slack_alert(message)
             except Exception as e:
                 logger.error(f"Failed to send Slack alert: {e}")
         
-        # TODO: Send email alert if configured
-        # if self.alert_email:
-        #     await self._send_email_alert(message)
-        
-        # Record alert in database
-        await self._record_alert(alert_type, message, monitor_name)
+        await self._record_alert(alert_type, message, monitor_name, extra_data)
     
     async def _send_slack_alert(self, message: str):
         """Send alert to Slack webhook"""
@@ -220,16 +266,21 @@ class AlertManager:
         self,
         alert_type: str,
         message: str,
-        monitor_name: Optional[str] = None
+        monitor_name: Optional[str] = None,
+        extra_data: Optional[dict] = None,
     ):
         """Record alert in database"""
         try:
-            await self.db.alerts.insert_one({
+            doc = {
                 "alert_type": alert_type,
-                "monitor_name": monitor_name,
                 "message": message,
                 "created_at": datetime.now(timezone.utc)
-            })
+            }
+            if monitor_name:
+                doc["monitor_name"] = monitor_name
+            if extra_data:
+                doc.update(extra_data)
+            await self.db.alerts.insert_one(doc)
         except Exception as e:
             logger.error(f"Failed to record alert in database: {e}")
     
@@ -237,6 +288,7 @@ class AlertManager:
         self,
         alert_type: str,
         monitor_name: Optional[str] = None,
+        identifier: Optional[str] = None,
         hours: int = 1
     ) -> bool:
         """
@@ -254,6 +306,8 @@ class AlertManager:
             
             if monitor_name:
                 query["monitor_name"] = monitor_name
+            if identifier:
+                query["alert_identifier"] = identifier
             
             recent = await self.db.alerts.find_one(query)
             return recent is not None

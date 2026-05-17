@@ -152,7 +152,7 @@ class GitHubMonitor(BaseMonitor):
             params={"q": query, "per_page": max_results},
             headers={
                 "Authorization": f"token {self.token}",
-                "Accept": "application/vnd.github.cloak-preview+json"
+                "Accept": "application/vnd.github.v3+json"
             },
             timeout=aiohttp.ClientTimeout(total=self.config.timeout_seconds)
         ) as response:

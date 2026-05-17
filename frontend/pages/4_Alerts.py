@@ -24,7 +24,7 @@ if brands and isinstance(brands, list):
 
 # Filter bar
 with st.container(border=True):
-    col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+    col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 1, 1, 1, 1, 1, 1])
     
     with col1:
         brand_filter = st.selectbox("Brand", list(brand_options.keys()))
@@ -33,12 +33,18 @@ with st.container(border=True):
         status_filter = st.selectbox("Status", ["All", "pending", "reviewed", "false_positive"])
     
     with col3:
-        source_filter = st.selectbox("Source", ["All", "pastebin", "github", "reddit", "hibp"])
+        source_filter = st.selectbox("Source", ["All", "github", "hackernews", "ransomware", "xposedornot", "intelx"])
     
     with col4:
+        decision_filter = st.selectbox("LLM", ["All", "ALERT", "ESCALATE", "SUPPRESS", "Not processed"])
+
+    with col5:
+        severity_filter = st.selectbox("Severity", ["All", "CRITICAL", "HIGH", "MEDIUM", "LOW"])
+
+    with col6:
         limit = st.selectbox("Limit", [10, 25, 50, 100], index=2)
     
-    with col5:
+    with col7:
         if st.button("Apply Filters", type="primary", use_container_width=True):
             st.session_state.apply_filters = True
 
@@ -69,6 +75,16 @@ hits_data = api.list_hits(brand_id=brand_id, status=status, source=source, limit
 
 if hits_data and "hits" in hits_data:
     hits = hits_data["hits"]
+    if decision_filter != "All":
+        if decision_filter == "Not processed":
+            hits = [h for h in hits if not h.get("enrichment")]
+        else:
+            hits = [h for h in hits if (h.get("enrichment") or {}).get("decision") == decision_filter]
+    if severity_filter != "All":
+        hits = [
+            h for h in hits
+            if ((h.get("enrichment") or {}).get("evaluation") or {}).get("severity") == severity_filter
+        ]
     total = hits_data.get("total", 0)
     page = hits_data.get("page", 1)
     

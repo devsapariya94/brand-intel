@@ -58,10 +58,19 @@ async def get_monitors_status(
         
         # Check availability
         is_available = await monitor.is_available()
+        if not is_available:
+            status = "unhealthy"
+        elif not recent_runs:
+            status = "unknown"
+        elif success_rate >= 0.8:
+            status = "healthy"
+        else:
+            status = "degraded"
         
         monitors_status.append(MonitorStatus(
             name=monitor.name,
             type=monitor_type,
+            status=status,
             enabled=True,
             available=is_available,
             rate_limit_remaining=rate_status.get("remaining", 0),
@@ -133,12 +142,14 @@ async def trigger_all_monitors(
             failed_scans=1 if result.get("errors") else 0,
             total_hits_found=result["total_hits_found"],
             total_hits_stored=result["total_hits_stored"],
+            total_hits_enriched=result.get("total_hits_enriched", 0),
             results=[MonitorResultResponse(
                 monitor_type="all",
                 brand_id=str(brand["_id"]),
                 brand_name=brand["name"],
                 hits_found=result["total_hits_found"],
                 hits_stored=result["total_hits_stored"],
+                hits_enriched=result.get("total_hits_enriched", 0),
                 execution_time_seconds=(completed_at - started_at).total_seconds(),
                 status="completed" if not result.get("errors") else "failed",
                 started_at=started_at,
@@ -164,6 +175,7 @@ async def trigger_all_monitors(
                     brand_name="",  # Would need to fetch
                     hits_found=brand_result.get("total_hits_found", 0),
                     hits_stored=brand_result.get("total_hits_stored", 0),
+                    hits_enriched=brand_result.get("total_hits_enriched", 0),
                     execution_time_seconds=(completed_at - started_at).total_seconds(),
                     status="completed",
                     started_at=started_at,
@@ -177,6 +189,7 @@ async def trigger_all_monitors(
             failed_scans=result["failed_scans"],
             total_hits_found=sum(r.hits_found for r in monitor_results),
             total_hits_stored=sum(r.hits_stored for r in monitor_results),
+            total_hits_enriched=sum(r.hits_enriched for r in monitor_results),
             results=monitor_results,
             started_at=started_at,
             completed_at=completed_at
@@ -229,6 +242,7 @@ async def trigger_specific_monitor(
         brand_name=brand["name"],
         hits_found=result.get("hits_found", 0),
         hits_stored=result.get("hits_stored", 0),
+        hits_enriched=result.get("hits_enriched", 0),
         execution_time_seconds=(completed_at - started_at).total_seconds(),
         status="completed" if not result.get("skipped") else "skipped",
         started_at=started_at,

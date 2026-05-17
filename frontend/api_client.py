@@ -147,6 +147,12 @@ class BrandIntelAPI:
     
     def get_enrichment_stats(self) -> Dict:
         return self._get("/enrichment/stats")
+
+    def get_llm_calls(self, limit: int = 50) -> List[Dict]:
+        return self._get("/enrichment/llm-calls", params={"limit": limit})
+
+    def get_llm_call_stats(self) -> Dict:
+        return self._get("/enrichment/llm-calls/stats")
     
     def process_hit(self, hit_id: str) -> Dict:
         return self._post(f"/enrichment/process/{hit_id}")

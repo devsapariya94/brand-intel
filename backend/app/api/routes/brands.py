@@ -12,6 +12,10 @@ from ..models.responses import BrandResponse, BrandStats
 router = APIRouter(prefix="/brands", tags=["brands"])
 
 
+def _brand_id_values(brand_id: ObjectId):
+    return [brand_id, str(brand_id)]
+
+
 @router.get("", response_model=List[BrandResponse])
 async def list_brands(
     active_only: bool = False,
@@ -28,7 +32,7 @@ async def list_brands(
     
     # Aggregate hit stats for all brands in one query
     hits_pipeline = [
-        {"$match": {"brand_id": {"$in": brand_ids}}},
+        {"$match": {"brand_id": {"$in": brand_ids + [str(bid) for bid in brand_ids]}}},
         {"$group": {
             "_id": "$brand_id",
             "total_hits": {"$sum": 1},
@@ -36,16 +40,26 @@ async def list_brands(
         }}
     ]
     hits_stats = await db.raw_hits.aggregate(hits_pipeline).to_list(length=None)
-    hits_map = {h["_id"]: h for h in hits_stats}
+    hits_map = {}
+    for h in hits_stats:
+        key = str(h["_id"])
+        if key not in hits_map:
+            hits_map[key] = {"total_hits": 0, "last_hit": None}
+        hits_map[key]["total_hits"] += h.get("total_hits", 0)
+        if h.get("last_hit") and (not hits_map[key]["last_hit"] or h["last_hit"] > hits_map[key]["last_hit"]):
+            hits_map[key]["last_hit"] = h["last_hit"]
     
     # 24h hits aggregation
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     hits_24h_pipeline = [
-        {"$match": {"brand_id": {"$in": brand_ids}, "detected_at": {"$gte": today_start}}},
+        {"$match": {"brand_id": {"$in": brand_ids + [str(bid) for bid in brand_ids]}, "detected_at": {"$gte": today_start}}},
         {"$group": {"_id": "$brand_id", "count": {"$sum": 1}}}
     ]
     hits_24h_result = await db.raw_hits.aggregate(hits_24h_pipeline).to_list(length=None)
-    hits_24h_map = {h["_id"]: h["count"] for h in hits_24h_result}
+    hits_24h_map = {}
+    for h in hits_24h_result:
+        key = str(h["_id"])
+        hits_24h_map[key] = hits_24h_map.get(key, 0) + h["count"]
     
     # Aggregate last scan for all brands
     last_run_pipeline = [
@@ -59,7 +73,7 @@ async def list_brands(
     result = []
     for brand in brands:
         bid = brand["_id"]
-        hit_stats = hits_map.get(bid, {})
+        hit_stats = hits_map.get(str(bid), {})
         result.append(BrandResponse(
             id=str(bid),
             name=brand["name"],
@@ -76,7 +90,7 @@ async def list_brands(
             updated_at=brand.get("updated_at"),
             stats=BrandStats(
                 total_hits=hit_stats.get("total_hits", 0),
-                hits_last_24h=hits_24h_map.get(bid, 0),
+                hits_last_24h=hits_24h_map.get(str(bid), 0),
                 last_scan=last_run_map.get(bid),
                 last_hit=hit_stats.get("last_hit")
             )
@@ -100,14 +114,14 @@ async def get_brand(
         raise HTTPException(status_code=404, detail="Brand not found")
     
     # Get stats
-    total_hits = await db.raw_hits.count_documents({"brand_id": brand["_id"]})
+    total_hits = await db.raw_hits.count_documents({"brand_id": {"$in": _brand_id_values(brand["_id"])}})
     hits_24h = await db.raw_hits.count_documents({
-        "brand_id": brand["_id"],
+        "brand_id": {"$in": _brand_id_values(brand["_id"])},
         "detected_at": {"$gte": datetime.now(timezone.utc).replace(hour=0, minute=0, second=0)}
     })
     
     last_run = await db.monitor_runs.find_one(
-        {"brand_id": brand["_id"]},
+        {"brand_id": {"$in": _brand_id_values(brand["_id"])}},
         sort=[("started_at", -1)]
     )
     

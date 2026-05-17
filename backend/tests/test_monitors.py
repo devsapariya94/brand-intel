@@ -606,7 +606,7 @@ class TestMonitorHealthChecker:
         result = await checker.get_health_status()
         
         assert result["overall_status"] == "unknown"
-        assert result["monitors"]["pastebin"]["status"] == "unknown"
+        assert result["monitors"]["github"]["status"] == "unknown"
     
     @pytest.mark.asyncio
     async def test_get_health_status_healthy(self):
@@ -617,7 +617,7 @@ class TestMonitorHealthChecker:
         now = datetime.now(timezone.utc)
         runs = [
             {
-                "monitor_type": "pastebin",
+                "monitor_type": "github",
                 "status": "completed",
                 "started_at": now,
                 "execution_time_seconds": 1.0,
@@ -635,7 +635,7 @@ class TestMonitorHealthChecker:
         
         result = await checker.get_health_status()
         
-        assert result["monitors"]["pastebin"]["status"] == "healthy"
+        assert result["monitors"]["github"]["status"] == "healthy"
     
     @pytest.mark.asyncio
     async def test_check_stale_monitors(self):
@@ -656,8 +656,7 @@ class TestMonitorHealthChecker:
         
         stale = await checker.check_stale_monitors(max_age_hours=2)
         
-        assert len(stale) == 4
-        assert "pastebin" in stale
+        assert len(stale) == 5
         assert "github" in stale
 
 

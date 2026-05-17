@@ -18,6 +18,55 @@ from ..models.responses import (
 router = APIRouter(prefix="/hits", tags=["hits"])
 
 
+def _brand_id_query_values(brand_id: str) -> List[object]:
+    values: List[object] = [brand_id]
+    try:
+        values.append(ObjectId(brand_id))
+    except Exception:
+        pass
+    return values
+
+
+async def _brand_name_for_hit(db: AsyncIOMotorDatabase, brand_id) -> str:
+    brand = await db.brands.find_one({"_id": brand_id})
+    if not brand:
+        try:
+            brand = await db.brands.find_one({"_id": ObjectId(brand_id)})
+        except Exception:
+            brand = None
+    return brand["name"] if brand else "Unknown"
+
+
+async def _enrichment_for_hit(db: AsyncIOMotorDatabase, hit_id: str) -> Optional[dict]:
+    enrichment = await db.enriched_hits.find_one({"hit_id": hit_id})
+    if not enrichment:
+        return None
+    enrichment.pop("_id", None)
+    return enrichment
+
+
+async def _raw_hit_response(db: AsyncIOMotorDatabase, hit: dict, brand_name: Optional[str] = None) -> RawHitResponse:
+    hit_id = str(hit["_id"])
+    return RawHitResponse(
+        id=hit_id,
+        brand_id=str(hit["brand_id"]),
+        brand_name=brand_name or await _brand_name_for_hit(db, hit.get("brand_id")),
+        source=hit["source"],
+        source_url=hit["source_url"],
+        raw_content=hit["raw_content"],
+        content_preview=hit["raw_content"][:500] if len(hit["raw_content"]) > 500 else hit["raw_content"],
+        detected_at=hit["detected_at"],
+        match_details=hit["match_details"],
+        processing_status=hit.get("processing_status", "pending"),
+        created_at=hit.get("created_at", hit["detected_at"]),
+        updated_at=hit.get("updated_at", hit["detected_at"]),
+        reviewed_by=hit.get("reviewed_by"),
+        reviewed_at=hit.get("reviewed_at"),
+        notes=hit.get("notes"),
+        enrichment=await _enrichment_for_hit(db, hit_id)
+    )
+
+
 @router.get("", response_model=PaginatedHitsResponse)
 async def list_hits(
     brand_id: Optional[str] = None,
@@ -30,10 +79,7 @@ async def list_hits(
     """List raw hits with filtering and pagination"""
     query = {}
     if brand_id:
-        try:
-            query["brand_id"] = ObjectId(brand_id)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid brand ID format")
+        query["brand_id"] = {"$in": _brand_id_query_values(brand_id)}
     if status:
         query["processing_status"] = status
     if source:
@@ -47,32 +93,24 @@ async def list_hits(
     hits = await db.raw_hits.find(query, sort=[("detected_at", -1)], skip=skip, limit=limit).to_list(length=limit)
     
     # Batch-fetch brand names to avoid N+1
-    brand_ids = list(set(h["brand_id"] for h in hits if h.get("brand_id")))
-    brands = await db.brands.find({"_id": {"$in": brand_ids}}).to_list(length=None)
-    brand_map = {b["_id"]: b["name"] for b in brands}
+    object_brand_ids = []
+    for h in hits:
+        bid = h.get("brand_id")
+        if isinstance(bid, ObjectId):
+            object_brand_ids.append(bid)
+        else:
+            try:
+                object_brand_ids.append(ObjectId(bid))
+            except Exception:
+                pass
+    brands = await db.brands.find({"_id": {"$in": list(set(object_brand_ids))}}).to_list(length=None)
+    brand_map = {str(b["_id"]): b["name"] for b in brands}
     
     # Convert to response format
     result = []
     for hit in hits:
-        brand_name = brand_map.get(hit.get("brand_id"), "Unknown")
-        
-        result.append(RawHitResponse(
-            id=str(hit["_id"]),
-            brand_id=str(hit["brand_id"]),
-            brand_name=brand_name,
-            source=hit["source"],
-            source_url=hit["source_url"],
-            raw_content=hit["raw_content"],
-            content_preview=hit["raw_content"][:500] if len(hit["raw_content"]) > 500 else hit["raw_content"],
-            detected_at=hit["detected_at"],
-            match_details=hit["match_details"],
-            processing_status=hit.get("processing_status", "pending"),
-            created_at=hit.get("created_at", hit["detected_at"]),
-            updated_at=hit.get("updated_at", hit["detected_at"]),
-            reviewed_by=hit.get("reviewed_by"),
-            reviewed_at=hit.get("reviewed_at"),
-            notes=hit.get("notes")
-        ))
+        brand_name = brand_map.get(str(hit.get("brand_id")), "Unknown")
+        result.append(await _raw_hit_response(db, hit, brand_name))
     
     return PaginatedHitsResponse(
         hits=result,
@@ -82,6 +120,16 @@ async def list_hits(
         has_next=(skip + limit) < total,
         has_prev=page > 1
     )
+
+
+@router.get("/stats", response_model=HitsStatsResponse)
+async def get_hits_stats_route(
+    brand_id: Optional[str] = None,
+    days: int = Query(7, ge=1, le=90),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Get hits statistics before the dynamic hit-id route is matched."""
+    return await _build_hits_stats(brand_id, days, db)
 
 
 @router.get("/{hit_id}", response_model=RawHitResponse)
@@ -98,26 +146,7 @@ async def get_hit(
     if not hit:
         raise HTTPException(status_code=404, detail="Hit not found")
     
-    brand = await db.brands.find_one({"_id": hit["brand_id"]})
-    brand_name = brand["name"] if brand else "Unknown"
-    
-    return RawHitResponse(
-        id=str(hit["_id"]),
-        brand_id=str(hit["brand_id"]),
-        brand_name=brand_name,
-        source=hit["source"],
-        source_url=hit["source_url"],
-        raw_content=hit["raw_content"],
-        content_preview=hit["raw_content"][:500] if len(hit["raw_content"]) > 500 else hit["raw_content"],
-        detected_at=hit["detected_at"],
-        match_details=hit["match_details"],
-        processing_status=hit.get("processing_status", "pending"),
-        created_at=hit.get("created_at", hit["detected_at"]),
-        updated_at=hit.get("updated_at", hit["detected_at"]),
-        reviewed_by=hit.get("reviewed_by"),
-        reviewed_at=hit.get("reviewed_at"),
-        notes=hit.get("notes")
-    )
+    return await _raw_hit_response(db, hit)
 
 
 @router.patch("/{hit_id}/status", response_model=RawHitResponse)
@@ -153,8 +182,7 @@ async def update_hit_status(
     return await get_hit(hit_id, db)
 
 
-@router.get("/stats", response_model=HitsStatsResponse)
-async def get_hits_stats(
+async def _build_hits_stats(
     brand_id: Optional[str] = None,
     days: int = Query(7, ge=1, le=90),
     db: AsyncIOMotorDatabase = Depends(get_database)
@@ -162,10 +190,7 @@ async def get_hits_stats(
     """Get hits statistics"""
     query = {}
     if brand_id:
-        try:
-            query["brand_id"] = ObjectId(brand_id)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid brand ID format")
+        query["brand_id"] = {"$in": _brand_id_query_values(brand_id)}
     
     # Total hits
     total_hits = await db.raw_hits.count_documents(query)
@@ -194,9 +219,8 @@ async def get_hits_stats(
     by_brand_result = await db.raw_hits.aggregate(by_brand_pipeline).to_list(length=None)
     by_brand = {}
     for item in by_brand_result:
-        brand = await db.brands.find_one({"_id": item["_id"]})
-        if brand:
-            by_brand[brand["name"]] = item["count"]
+        brand_name = await _brand_name_for_hit(db, item["_id"])
+        by_brand[brand_name] = item["count"]
     
     # Timeline
     start_date = datetime.now(timezone.utc) - timedelta(days=days)

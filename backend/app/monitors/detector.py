@@ -242,16 +242,27 @@ class KeywordMatcher:
         """
         Apply all matching strategies and return combined results.
         """
+        user_keywords = brand.get('keywords', []) or []
+        brand_name = brand.get('name', '')
+        domain = brand.get('domain', '')
+
+        exact_keywords = list(user_keywords)
+        if brand_name and brand_name not in exact_keywords:
+            exact_keywords.append(brand_name)
+        domain_root = domain.split('.')[0] if domain else ''
+        if domain and domain not in exact_keywords:
+            exact_keywords.append(domain)
+        if domain_root and domain_root not in exact_keywords:
+            exact_keywords.append(domain_root)
+
+        fuzzy_keywords = list(user_keywords)
+        if brand_name and brand_name not in fuzzy_keywords:
+            fuzzy_keywords.append(brand_name)
+
         results = []
-        
-        results.extend(self.exact_matcher.match(content, brand.get('keywords', [])))
-        
+        results.extend(self.exact_matcher.match(content, exact_keywords))
         results.extend(self.exact_matcher.match_emails(content, brand.get('email_patterns', [])))
-        
-        results.extend(self.fuzzy_matcher.match(content, brand.get('keywords', [])))
-        
+        results.extend(self.fuzzy_matcher.match(content, fuzzy_keywords))
         results.extend(self.regex_matcher.match(content, brand.get('regex_patterns', [])))
-        
-        results.extend(self.domain_matcher.match(content, brand.get('domain', '')))
-        
+        results.extend(self.domain_matcher.match(content, domain))
         return MatchResult(results)

@@ -1,5 +1,5 @@
 """Shared dependencies for FastAPI routes"""
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Any
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from fastapi import Depends
 import os

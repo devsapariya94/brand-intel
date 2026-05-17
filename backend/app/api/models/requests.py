@@ -65,6 +65,6 @@ class EnrichmentConfigUpdate(BaseModel):
 
 class CircuitBreakerResetRequest(BaseModel):
     """Request model for resetting circuit breaker"""
-    monitor_type: str = Field(..., description="Monitor type to reset: pastebin, github, hibp, reddit")
+    monitor_type: str = Field(..., description="Monitor type to reset: github, hackernews, ransomware, xposedornot, intelx")
 
 # Made with Bob

@@ -1,7 +1,9 @@
 """Enrichment - AI enrichment configuration"""
 import streamlit as st
+import pandas as pd
 from api_client import BrandIntelAPI
 from components.stats_charts import severity_pie_chart
+from utils.formatters import format_datetime
 
 st.set_page_config(page_title="Enrichment", page_icon=":brain:", layout="wide")
 
@@ -16,6 +18,8 @@ st.title(":brain: AI Enrichment")
 # Fetch config and stats
 config = api.get_enrichment_config()
 stats = api.get_enrichment_stats()
+llm_stats = api.get_llm_call_stats()
+llm_calls = api.get_llm_calls(limit=25)
 
 if not config or "error" in config:
     st.warning("Could not fetch enrichment configuration")
@@ -86,6 +90,23 @@ with col2:
     else:
         st.info("No enrichment statistics available")
 
+    st.divider()
+    st.subheader("LLM Provider Calls")
+    if llm_stats and "error" not in llm_stats:
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("Calls", llm_stats.get("total_calls", 0))
+        with col_b:
+            st.metric("Success Rate", f"{llm_stats.get('success_rate', 0) * 100:.1f}%")
+        with col_c:
+            st.metric("Avg Latency", f"{llm_stats.get('avg_latency_ms', 0):.0f} ms")
+
+        providers = llm_stats.get("by_provider", [])
+        if providers:
+            st.dataframe(pd.DataFrame(providers), use_container_width=True, hide_index=True)
+    else:
+        st.info("No LLM provider call telemetry available")
+
 st.divider()
 
 # Manual processing
@@ -107,3 +128,21 @@ with col2:
                 st.error(f"Processing failed: {result}")
         else:
             st.warning("Please enter a hit ID")
+
+st.divider()
+st.subheader("Recent LLM Calls")
+if llm_calls and isinstance(llm_calls, list):
+    rows = []
+    for call in llm_calls:
+        rows.append({
+            "Time": format_datetime(call.get("created_at", ""))[:19],
+            "Provider": call.get("provider", ""),
+            "Model": call.get("model", ""),
+            "Status": call.get("status", ""),
+            "Latency": f"{call.get('latency_ms', 0)} ms",
+            "Hit": call.get("hit_id", ""),
+            "Error": call.get("error", "") or "",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+else:
+    st.info("No LLM calls recorded yet")

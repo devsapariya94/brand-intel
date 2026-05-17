@@ -7,10 +7,11 @@ from .storage import RawHitStorage
 from .health import MonitorHealthChecker, MONITOR_TYPES
 from .retry import with_retry, RetryConfig
 from .rate_limiter import RateLimiter
-from .pastebin import PastebinMonitor
 from .github import GitHubMonitor
-from .hibp import HIBPMonitor
-from .reddit import RedditMonitor
+from .hackernews import HackerNewsMonitor
+from .ransomware import RansomwareMonitor
+from .xposedornot import XposedOrNotMonitor
+from .intelx import IntelXMonitor
 
 __all__ = [
     "BaseMonitor",
@@ -26,8 +27,9 @@ __all__ = [
     "with_retry",
     "RetryConfig",
     "RateLimiter",
-    "PastebinMonitor",
     "GitHubMonitor",
-    "HIBPMonitor",
-    "RedditMonitor",
+    "HackerNewsMonitor",
+    "RansomwareMonitor",
+    "XposedOrNotMonitor",
+    "IntelXMonitor",
 ]

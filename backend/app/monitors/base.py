@@ -64,7 +64,8 @@ class BaseMonitor(ABC):
         """
         try:
             if not await self.is_available():
-                raise Exception(f"{self.name} is not available")
+                logger.warning(f"{self.name} is not available, skipping")
+                return []
             
             hits = await self.search(brand)
             self._last_run_time = datetime.now(timezone.utc)

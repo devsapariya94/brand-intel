@@ -3,7 +3,7 @@ import asyncio
 import signal
 import logging
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -18,7 +18,9 @@ from ..monitors.storage import RawHitStorage
 from ..monitors.detector import KeywordMatcher
 from ..monitors.base import MonitorConfig
 from ..monitors.base import BaseMonitor
+from ..enrichment.service import EnrichmentService
 from ..models.schemas import create_indexes
+from ..models.enrichment_schemas import create_enrichment_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,7 @@ class MonitoringDaemon:
         self.alert_manager: Optional[AlertManager] = None
         self.dlq: Optional[DeadLetterQueue] = None
         self.health_server: Optional[HealthCheckServer] = None
+        self._enrichment_service: Optional[EnrichmentService] = None
         self.running = False
         self.shutdown_event = asyncio.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -68,6 +71,7 @@ class MonitoringDaemon:
         # Create MongoDB indexes
         try:
             await create_indexes(self.db_client.brand_intel)
+            await create_enrichment_indexes(self.db_client.brand_intel)
             logger.info("MongoDB indexes created/verified")
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
@@ -100,6 +104,17 @@ class MonitoringDaemon:
         
         # Initialize monitors
         monitors = self._create_monitors()
+
+        # Initialize enrichment service before orchestrator so new hits can be analyzed immediately.
+        if self.config.enrichment_enabled and (self.config.llm_api_key or self.config.anthropic_api_key):
+            try:
+                self._enrichment_service = EnrichmentService(self.db_client, self.config, alert_manager=self.alert_manager)
+                logger.info(f"Enrichment service initialized (model: {self.config.llm_model})")
+            except Exception as e:
+                logger.warning(f"Failed to initialize enrichment service: {e}")
+                self._enrichment_service = None
+        else:
+            logger.info("Enrichment service disabled or no API key configured")
         
         # Initialize storage and matcher
         storage = RawHitStorage(self.db_client)
@@ -112,7 +127,8 @@ class MonitoringDaemon:
             matcher=matcher,
             db_client=self.db_client,
             circuit_breaker=self.circuit_breaker,
-            dlq=self.dlq
+            dlq=self.dlq,
+            enrichment_service=self._enrichment_service
         )
         logger.info("Monitor orchestrator initialized")
         
@@ -134,25 +150,13 @@ class MonitoringDaemon:
     
     def _create_monitors(self) -> List[BaseMonitor]:
         """Create monitor instances with configuration and API keys"""
-        from ..monitors.pastebin import PastebinMonitor
         from ..monitors.github import GitHubMonitor
-        from ..monitors.reddit import RedditMonitor
-        from ..monitors.hibp import HIBPMonitor
+        from ..monitors.hackernews import HackerNewsMonitor
+        from ..monitors.ransomware import RansomwareMonitor
+        from ..monitors.xposedornot import XposedOrNotMonitor
+        from ..monitors.intelx import IntelXMonitor
         
         monitors = []
-        
-        # Pastebin
-        pastebin_config = MonitorConfig(
-            enabled=True,
-            rate_limit_per_minute=self.config.pastebin_rate_limit,
-            timeout_seconds=self.config.monitor_timeout_seconds,
-            max_retries=self.config.max_retries
-        )
-        if self.config.pastebin_api_key:
-            monitors.append(PastebinMonitor(pastebin_config, api_key=self.config.pastebin_api_key))
-            logger.info("Pastebin monitor created")
-        else:
-            logger.warning("Pastebin monitor skipped: no API key configured")
         
         # GitHub
         github_config = MonitorConfig(
@@ -167,39 +171,46 @@ class MonitoringDaemon:
         else:
             logger.warning("GitHub monitor skipped: no token configured")
         
-        # Reddit
-        reddit_config = MonitorConfig(
+        # Hacker News (free, no API key)
+        hn_config = MonitorConfig(
             enabled=True,
-            rate_limit_per_minute=self.config.reddit_rate_limit,
+            rate_limit_per_minute=60,
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        if self.config.reddit_client_id and self.config.reddit_client_secret:
-            monitors.append(RedditMonitor(
-                reddit_config,
-                client_id=self.config.reddit_client_id,
-                client_secret=self.config.reddit_client_secret
-            ))
-            logger.info("Reddit monitor created")
-        else:
-            logger.warning("Reddit monitor skipped: no credentials configured")
+        monitors.append(HackerNewsMonitor(hn_config))
+        logger.info("HackerNews monitor created")
         
-        # HIBP
-        hibp_config = MonitorConfig(
+        # Ransomware.live (free, no API key)
+        ransom_config = MonitorConfig(
             enabled=True,
-            rate_limit_per_minute=self.config.hibp_rate_limit,
+            rate_limit_per_minute=1,
             timeout_seconds=self.config.monitor_timeout_seconds,
             max_retries=self.config.max_retries
         )
-        if self.config.hibp_api_key:
-            monitors.append(HIBPMonitor(
-                hibp_config,
-                api_key=self.config.hibp_api_key,
-                db_client=self.db_client
-            ))
-            logger.info("HIBP monitor created")
-        else:
-            logger.warning("HIBP monitor skipped: no API key configured")
+        monitors.append(RansomwareMonitor(ransom_config))
+        logger.info("Ransomware monitor created")
+
+        # XposedOrNot (free, no API key for basic checks)
+        xon_config = MonitorConfig(
+            enabled=True,
+            rate_limit_per_minute=30,
+            timeout_seconds=self.config.monitor_timeout_seconds,
+            max_retries=self.config.max_retries
+        )
+        monitors.append(XposedOrNotMonitor(xon_config))
+        logger.info("XposedOrNot monitor created")
+
+        # Intelligence X (free tier, requires API key)
+        if self.config.intelx_api_key:
+            intelx_config = MonitorConfig(
+                enabled=True,
+                rate_limit_per_minute=10,
+                timeout_seconds=self.config.monitor_timeout_seconds,
+                max_retries=self.config.max_retries
+            )
+            monitors.append(IntelXMonitor(intelx_config, api_key=self.config.intelx_api_key))
+            logger.info("IntelX monitor created")
         
         logger.info(f"Created {len(monitors)} monitors")
         return monitors
@@ -291,6 +302,27 @@ class MonitoringDaemon:
             
         except Exception as e:
             logger.error(f"DLQ retry job failed: {e}", exc_info=True)
+    
+    async def enrichment_job(self):
+        """Periodic job to run LLM enrichment on pending hits"""
+        if not self._enrichment_service:
+            return
+        
+        try:
+            pending_count = await self.db_client.brand_intel.raw_hits.count_documents(
+                {"processing_status": "pending"}
+            )
+            
+            if pending_count == 0:
+                return
+            
+            logger.info(f"Processing enrichment batch: {pending_count} pending hits")
+            processed = await self._enrichment_service.process_pending_batch(batch_size=10)
+            
+            if processed > 0:
+                logger.info(f"Enrichment job completed: {processed} hits enriched")
+        except Exception as e:
+            logger.error(f"Enrichment job failed: {e}", exc_info=True)
     
     async def _process_dlq_item(self, hit_data: dict):
         """Process a single DLQ item by re-storing it"""
@@ -399,6 +431,18 @@ class MonitoringDaemon:
             max_instances=1
         )
         logger.info("Scheduled health check job every hour")
+        
+        if self._enrichment_service:
+            self.scheduler.add_job(
+                self.enrichment_job,
+                trigger=IntervalTrigger(minutes=5),
+                id='enrichment_processor',
+                name='LLM enrichment batch processor',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True
+            )
+            logger.info("Scheduled enrichment batch job every 5 minutes")
         
         self.scheduler.add_job(
             self.cleanup_stale_runs_job,

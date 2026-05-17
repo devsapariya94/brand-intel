@@ -39,13 +39,21 @@ class RawHitStorage:
         content_hash = hashlib.sha256(hit.raw_content.encode()).hexdigest()
         
         # Check if already exists
-        existing = await self.raw_hits.find_one({"content_hash": content_hash, "brand_id": brand_id})
+        try:
+            stored_brand_id = ObjectId(brand_id)
+        except Exception:
+            stored_brand_id = brand_id
+
+        existing = await self.raw_hits.find_one({
+            "content_hash": content_hash,
+            "brand_id": stored_brand_id
+        })
         if existing:
             return None  # Duplicate
         
         # Prepare document
         doc = {
-            "brand_id": brand_id,
+            "brand_id": stored_brand_id,
             "source": hit.source,
             "source_url": hit.source_url,
             "raw_content": hit.raw_content,

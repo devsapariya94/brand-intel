@@ -5,11 +5,38 @@ echo "========================================="
 echo "  Brand Intel - Starting Services"
 echo "========================================="
 
-# Check if MongoDB is running
-if ! pgrep -x "mongod" > /dev/null; then
-    echo "WARNING: MongoDB is not running. Please start it first."
-    echo "  brew services start mongodb-community  (macOS)"
-    echo "  sudo systemctl start mongod            (Linux)"
+# Activate virtual environment
+VENV_DIR="$(pwd)/.venv"
+export PATH="$VENV_DIR/bin:$PATH"
+
+# Load MONGODB_URI from .env if exists
+if [ -f backend/.env ]; then
+    export $(grep -v '^#' backend/.env | xargs) 2>/dev/null
+fi
+
+MONGO_URI="${MONGODB_URI:-mongodb://localhost:27017}"
+
+# Try to connect to MongoDB using the configured URI
+echo "Checking MongoDB connection..."
+
+MONGO_CHECK=$(python3 << 'PYEOF'
+import sys, os
+from pymongo import MongoClient
+uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
+try:
+    client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+    client.admin.command("ping")
+    print("OK")
+except Exception as e:
+    print(f"FAIL: {e}")
+PYEOF
+)
+
+if [[ "$MONGO_CHECK" == "OK" ]]; then
+    echo "MongoDB: Connected"
+else
+    echo "WARNING: $MONGO_CHECK"
+    echo "Please check your MONGODB_URI in backend/.env"
     exit 1
 fi
 

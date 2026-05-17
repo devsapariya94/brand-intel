@@ -78,6 +78,76 @@ async def get_enrichment_stats(
     return EnrichmentStatsResponse(**stats)
 
 
+@router.get("/llm-calls")
+async def get_llm_calls(
+    limit: int = 50,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Get recent persisted LLM provider calls."""
+    limit = min(max(limit, 1), 200)
+    calls = await db.llm_calls.find(
+        {},
+        sort=[("created_at", -1)],
+        limit=limit
+    ).to_list(length=limit)
+
+    return [
+        {
+            "id": str(call["_id"]),
+            "hit_id": call.get("hit_id"),
+            "brand_id": call.get("brand_id"),
+            "provider": call.get("provider"),
+            "model": call.get("model"),
+            "status": call.get("status"),
+            "latency_ms": call.get("latency_ms", 0),
+            "error": call.get("error"),
+            "response_preview": call.get("response_preview", ""),
+            "created_at": call.get("created_at"),
+        }
+        for call in calls
+    ]
+
+
+@router.get("/llm-calls/stats")
+async def get_llm_call_stats(
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Get aggregate LLM provider call telemetry."""
+    total = await db.llm_calls.count_documents({})
+    successful = await db.llm_calls.count_documents({"status": "success"})
+    failed = await db.llm_calls.count_documents({"status": "failed"})
+
+    latency_result = await db.llm_calls.aggregate([
+        {"$group": {"_id": None, "avg_latency_ms": {"$avg": "$latency_ms"}}}
+    ]).to_list(length=1)
+
+    by_provider_result = await db.llm_calls.aggregate([
+        {"$group": {
+            "_id": {"provider": "$provider", "model": "$model"},
+            "count": {"$sum": 1},
+            "failures": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
+        }},
+        {"$sort": {"count": -1}},
+    ]).to_list(length=None)
+
+    return {
+        "total_calls": total,
+        "successful_calls": successful,
+        "failed_calls": failed,
+        "success_rate": successful / total if total else 0.0,
+        "avg_latency_ms": latency_result[0]["avg_latency_ms"] if latency_result else 0.0,
+        "by_provider": [
+            {
+                "provider": item["_id"].get("provider"),
+                "model": item["_id"].get("model"),
+                "count": item["count"],
+                "failures": item["failures"],
+            }
+            for item in by_provider_result
+        ],
+    }
+
+
 @router.post("/process/{hit_id}")
 async def manually_process_hit(
     hit_id: str,
